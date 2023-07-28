@@ -2,15 +2,26 @@
 import { cn } from "@/lib/utils";
 import { Message } from "@/lib/validators/message";
 import { useMutation } from "@tanstack/react-query";
-import { FC, HTMLAttributes, useState } from "react";
+import { FC, HTMLAttributes, useContext, useRef, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 import { json } from "stream/consumers";
-import { nanoid } from 'nanoid'
+import { nanoid } from "nanoid";
+import { MessagesContext } from "@/context/messages";
 
 interface ChatInputProps extends HTMLAttributes<HTMLDivElement> {}
 
 const ChatInput: FC<ChatInputProps> = ({ className, ...props }) => {
   const [input, setInput] = useState<string>("");
+
+  const {
+    messages,
+    addMessage,
+    removeMessage,
+    updateMessage,
+    setIsMessageUpdating,
+  } = useContext(MessagesContext);
+
+  const textareaRef = useRef<null | HTMLTextAreaElement>(null);
 
   const { mutate: sendMessage, isLoading } = useMutation({
     mutationFn: async (message: Message) => {
@@ -19,12 +30,47 @@ const ChatInput: FC<ChatInputProps> = ({ className, ...props }) => {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ messages: "hello" }),
+        body: JSON.stringify({ messages: [message] }),
       });
       return response.body;
     },
-    onSuccess: () => {
-      console.log("success");
+    // turns the api stream into actual text
+    onMutate(message) {
+      addMessage(message);
+    },
+
+    onSuccess: async (stream) => {
+      // console.log("success");
+      if (!stream) throw new Error("Stream not found");
+
+      const id = nanoid();
+      const responseMessage: Message = {
+        id,
+        isUserMessage: false,
+        text: "",
+      };
+
+      addMessage(responseMessage);
+
+      setIsMessageUpdating(true);
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        const chunkValue = decoder.decode(value);
+        // console.log(chunkValue);
+        updateMessage(id, (prev) => prev + chunkValue);
+      }
+
+      setIsMessageUpdating(false);
+      setInput("");
+
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 10);
     },
   });
 
@@ -33,6 +79,7 @@ const ChatInput: FC<ChatInputProps> = ({ className, ...props }) => {
       <div {...props} className={cn("border-t border-zinc-300", className)}>
         <div className="relative mt-4 flex-1 overflow-hidden rounded-lg border-none outline-none">
           <TextareaAutosize
+            ref={textareaRef}
             rows={2}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
